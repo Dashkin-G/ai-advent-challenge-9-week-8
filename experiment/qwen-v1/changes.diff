@@ -53,3 +53,113 @@ index bebc5cc..43d6e1d 100644
  @app.post("/api/help")
  async def help_command(command: Command):
      question = assistant.parse(command.text)
+diff --git a/app/main.py b/app/main.py
+index bebc5cc..43d6e1d 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -2,6 +2,7 @@
+ проекта /files, MCP-серверы git на /mcp/git, CRM на /mcp/crm и файлов на /mcp/files."""
+ import asyncio
+ import logging
++import time
+ from contextlib import asynccontextmanager
+
+ import uvicorn
+@@ -81,6 +82,42 @@ async def status():
+             "model": config.MODEL, "embed_model": config.EMBED_MODEL, "docs": rag.info()}
+
+
++@app.get("/api/search")
++async def search(q: str, top: int = config.TOP):
++    """Поиск по документации проекта без модели — q обязателен, top по умолчанию как /help (не больше 10)."""
++    if not q.strip():
++        raise HTTPException(status_code=400, detail="Укажите запрос в параметре q")
++    if top < 1:
++        raise HTTPException(status_code=400, detail="top должен быть больше 0")
++    top = min(top, 10)
++
++    step = "search"
++    try:
++        started = time.perf_counter()
++        hits = await rag.search(q, top=top)
++        seconds = round(time.perf_counter() - started, 2)
++    except FileNotFoundError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++    except llm.LLMError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++
++    return {
++        "query": q,
++        "top": top,
++        "seconds": seconds,
++        "hits": [
++            {
++                "file": hit["file"],
++                "title": hit["title"],
++                "score": hit["score"],
++                "text": hit["text"],
++                "kind": hit["kind"],
++            }
++            for hit in hits
++        ],
++    }
++
++
+ @app.post("/api/help")
+ async def help_command(command: Command):
+     question = assistant.parse(command.text)
+diff --git a/app/main.py b/app/main.py
+index bebc5cc..43d6e1d 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -2,6 +2,7 @@
+ проекта /files, MCP-серверы git на /mcp/git, CRM на /mcp/crm и файлов на /mcp/files."""
+ import asyncio
+ import logging
++import time
+ from contextlib import asynccontextmanager
+
+ import uvicorn
+@@ -81,6 +82,42 @@ async def status():
+             "model": config.MODEL, "embed_model": config.EMBED_MODEL, "docs": rag.info()}
+
+
++@app.get("/api/search")
++async def search(q: str, top: int = config.TOP):
++    """Поиск по документации проекта без модели — q обязателен, top по умолчанию как /help (не больше 10)."""
++    if not q.strip():
++        raise HTTPException(status_code=400, detail="Укажите запрос в параметре q")
++    if top < 1:
++        raise HTTPException(status_code=400, detail="top должен быть больше 0")
++    top = min(top, 10)
++
++    step = "search"
++    try:
++        started = time.perf_counter()
++        hits = await rag.search(q, top=top)
++        seconds = round(time.perf_counter() - started, 2)
++    except FileNotFoundError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++    except llm.LLMError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++
++    return {
++        "query": q,
++        "top": top,
++        "seconds": seconds,
++        "hits": [
++            {
++                "file": hit["file"],
++                "title": hit["title"],
++                "score": hit["score"],
++                "text": hit["text"],
++                "kind": hit["kind"],
++            }
++            for hit in hits
++        ],
++    }
++
++
+ @app.post("/api/help")
+ async def help_command(command: Command):
+     question = assistant.parse(command.text)
