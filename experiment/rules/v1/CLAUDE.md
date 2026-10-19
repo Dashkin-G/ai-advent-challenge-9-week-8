@@ -1,0 +1,155 @@
+# Ассистент разработчика — правила проекта
+
+Учебный проект AI Advent Challenge (неделя 8; код перенесён из недели 7). Ассистент отвечает на вопросы о
+соседнем проекте `../ml-student-dropout`, ревьюит его pull request, отвечает клиентам поддержки и правит
+файлы проекта по задаче. Модели локальные — Ollama: `qwen3.5:4b` (ответы) и `bge-m3` (векторы).
+
+## Стек
+
+- Python 3.12, FastAPI + uvicorn, `httpx2` (HTTP-клиент), `numpy` (векторы), MCP SDK 2.x (`mcp`).
+- Pydantic — только тела запросов в `main.py`. Своих классов почти нет: модули с функциями.
+- Фронт — по одному `static/*.html` на страницу: чистый HTML + CSS + JS в одном файле, без сборки и фреймворков.
+- Зависимости — `requirements.txt` без версий. Новую зависимость добавлять только если без неё никак.
+- Тестов нет. Проверка — линтер, импорт и ручной прогон (см. «Проверка»).
+
+## Структура
+
+```
+app/config.py     все настройки: os.getenv("ИМЯ", дефолт), пути от ROOT, адреса MCP
+app/llm.py        Ollama: status, load, embed, chat (поток событий); LLMError — ошибка по-человечески
+app/rag.py        фрагменты документации и кода, Index с кэшем векторов в data/, search
+app/*_mcp.py      MCP-серверы (git, crm, files): MCPServer + @server.tool(), ошибка — ToolError
+app/assistant.py  /help: MCP → RAG → промпт → ответ; общие помощники call, reason, dumps
+app/support.py    поддержка, app/files.py — работа с файлами, app/review.py — ревью PR (CLI)
+app/main.py       FastAPI: страницы, /api/*, MCP-серверы смонтированы на /mcp/<имя>/
+static/*.html     страницы: index (/help), support, files
+support/          данные поддержки: faq.md, crm.json
+data/             кэш векторов (в .gitignore)
+```
+
+Слои: `main.py` знает про HTTP и только вызывает функции модулей. Модули фич не импортируют FastAPI.
+Модели вызывает только `llm.py`. Настройки читает только `config.py`.
+
+## Соглашения
+
+- **Язык**: докстринги, комментарии, тексты ошибок, промпты, README — по-русски. Имена в коде — английские.
+- **Имена**: модули — одно слово (`support.py`, `files_mcp.py`); функции — глагол или существительное без
+  префиксов `get_`/`do_` (`answer`, `queue`, `context_text`, `ensure_index`); приватные — с `_`;
+  константы модуля — `UPPER_CASE` с комментарием «зачем» (`MAX = 900  # знаков во фрагменте…`).
+- **Докстринг** у каждой функции — одна строка: что возвращает или делает; «почему» — вторым предложением.
+  Модуль начинается с докстринга: что он делает, стрелками по шагам.
+- **Комментарий** объясняет причину, а не пересказывает код.
+- **Потоки шагов** — async-генератор событий `{"type": ...}`; `main.py` отдаёт их как NDJSON через
+  `assistant.dumps`. Ошибку шага не бросаем, а отдаём событием `{"type": "error", "step": ..., "message": ...}`.
+- **Время** — `time.perf_counter()`, секунды `round(..., 2)`, миллисекунды `round(... * 1000)`.
+- **Ошибки для человека**: что случилось и что сделать («Ollama не запущен — откройте его из меню «Пуск»»).
+  `LLMError` из `llm.py`, `ToolError` в MCP-серверах, `HTTPException(400, detail="…")` в `main.py`.
+- **Строки** — f-строки, двойные кавычки; файлы — `encoding="utf-8"`; JSON — `ensure_ascii=False`.
+- Длина строки — до 130 знаков. Системные промпты — одна строка на правило.
+
+## Примеры хорошего кода
+
+Настройка — в `config.py`, с дефолтом и комментарием:
+
+```python
+TOP = int(os.getenv("TOP", "3"))  # фрагментов документации в промпт
+```
+
+Эндпоинт — тонкий: проверка входа, вызов модуля, поток событий:
+
+```python
+@app.post("/api/support/answer")
+async def support_answer(body: Question):
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Напишите вопрос клиента")
+
+    async def stream():
+        async for event in support.answer(body.ticket_id, question):
+            yield assistant.dumps(event)
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+```
+
+Ошибка внешнего сервиса — переведена на человеческий язык:
+
+```python
+    try:
+        async with _client(600) as client:
+            response = await client.post("/api/embed", json={"model": config.EMBED_MODEL, "input": texts})
+    except httpx2.ConnectError:
+        raise LLMError(NOT_RUNNING)
+    if response.status_code == 404:
+        raise _missing(config.EMBED_MODEL)
+```
+
+Инструмент MCP — аргументы с описанием через `Annotated`, результат — dict:
+
+```python
+@server.tool()
+def list_files(
+    path: Annotated[str, Field(description="Папка внутри проекта, например src/ml; пусто — весь проект")] = "",
+) -> dict[str, Any]:
+    """Файлы проекта — отслеживаемые git и новые, без игнорируемых (.venv, data, models)."""
+    found = git("ls-files", "--cached", "--others", "--exclude-standard", "--", path or ".").splitlines()
+    return {"path": path or ".", "count": len(found), "files": found}
+```
+
+Шаги с временем и ошибкой по шагу:
+
+```python
+    step = "sources"
+    try:
+        started = time.perf_counter()
+        hits = await rag.search(question)
+        yield {"type": "sources", "hits": hits, "seconds": round(time.perf_counter() - started, 2)}
+    except llm.LLMError as exc:
+        yield {"type": "error", "step": step, "message": str(exc)}
+```
+
+## Запрещено
+
+- `print` для отладки — только `logging` (`logger = logging.getLogger(__name__)`), и только в `main.py`/CLI.
+- Голый `except:` и проглатывание ошибки молча (`except Exception: pass`). Ловим — показываем словами.
+- Настройки, адреса и ключи прямо в коде модулей: всё — через `config.py` и переменные окружения.
+- Логика в `main.py` и FastAPI в модулях фич. `requests` и синхронный HTTP в async-коде — только `httpx2`.
+- Новые слои и абстракции «на вырост»: классы-сервисы, репозитории, DI, базовые классы ради одного наследника.
+- Английские тексты для пользователя и сообщения ошибок вида `"Error: invalid input"`.
+
+## Шаблон модуля
+
+```python
+"""Что делает модуль: шаг → шаг → результат."""
+import time
+
+from app import config, llm, rag
+
+LIMIT = 10  # почему именно столько
+
+
+async def run(question):
+    """Шаги событиями: first → second → done; ошибка — error с шагом."""
+    step = "first"
+    try:
+        started = time.perf_counter()
+        ...
+        yield {"type": "first", "seconds": round(time.perf_counter() - started, 2)}
+    except llm.LLMError as exc:
+        yield {"type": "error", "step": step, "message": str(exc)}
+```
+
+Импорты: стандартная библиотека → сторонние → `from app import ...` (модули целиком, не функции).
+
+## README
+
+Каждый день — раздел `## День N. Название` с подразделами: что сделано, «Как работает» (схема в блоке
+кода), «Запуск», «Как проверить задание», «Результат (дата, железо)» с таблицей замеров, «Находки»,
+«Как устроено (новое)» и строка API. Пишем коротко и цифрами.
+
+## Проверка
+
+```
+.venv\Scripts\ruff.exe check app
+.venv\Scripts\python.exe -c "import app.main"
+.venv\Scripts\python.exe -m app.main        # http://127.0.0.1:8001, нужен Ollama
+```

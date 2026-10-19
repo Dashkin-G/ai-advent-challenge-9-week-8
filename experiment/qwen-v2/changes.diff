@@ -1,0 +1,37 @@
+diff --git a/app/main.py b/app/main.py
+index bebc5cc..2f5939b 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -2,6 +2,7 @@
+ проекта /files, MCP-серверы git на /mcp/git, CRM на /mcp/crm и файлов на /mcp/files."""
+ import asyncio
+ import logging
++import time
+ from contextlib import asynccontextmanager
+ 
+ import uvicorn
+@@ -137,5 +138,24 @@ async def files_discard():
+     return await files.discard()
+ 
+ 
++@app.get("/api/search")
++async def search(q: str, top: int = config.TOP):
++    if not q.strip():
++        raise HTTPException(status_code=400, detail="Напишите поисковый запрос в параметре q")
++    if top <= 0:
++        raise HTTPException(status_code=400, detail="Параметр top должен быть больше 0")
++    if top > 10:
++        top = 10
++
++    started = time.perf_counter()
++    hits = await rag.search(q, top=top)
++    seconds = round(time.perf_counter() - started, 2)
++
++    return {"count": len(hits), "seconds": seconds, "hits": [
++        {"file": hit["file"], "title": hit["title"], "score": hit["score"], "text": hit["text"]}
++        for hit in hits
++    ]}
++
++
+ if __name__ == "__main__":
+     uvicorn.run(app, host=config.HOST, port=config.PORT)

@@ -1,0 +1,15 @@
+# Линтер проекта: ruff check app
+line-length = 130
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "B904",  # LLMError заменяет исключение httpx своим текстом — цепочка причин пользователю не нужна
+    "B905",  # zip по спискам одной длины — так построены индексы
+    "E731",  # короткая lambda-помощница внутри функции, как sec в llm._counters
+]
+
+[lint.per-file-ignores]
+# системные промпты: одно правило — одна строка, их не переносим
+"app/{assistant,files,review,support}.py" = ["E501"]

@@ -1,0 +1,11 @@
+All checks passed!
+--- import app.main
+ok
+--- GET /api/search без Ollama (experiment\smoke.py)
+{'q': 'как запустить', 'top': 2} → 200 {'count': 2, 'seconds': 0.01, 'hits': [{'file': 'README.md', 'title': 'Быстрый старт', 'score': 1.0, 'text': '```bash\npython -m venv .venv\n.venv\\Scripts\\activate          # Linux / macOS: source .venv/bin/activate\np
+{'q': 'как запустить'} → 200 {'count': 3, 'seconds': 0.0, 'hits': [{'file': 'README.md', 'title': 'Быстрый старт', 'score': 1.0, 'text': '```bash\npython -m venv .venv\n.venv\\Scripts\\activate          # Linux / macOS: source .venv/bin/activate\npi
+{} → 422 {'detail': [{'type': 'missing', 'loc': ['query', 'q'], 'msg': 'Field required', 'input': None}]}
+{'q': '  '} → 400 {'detail': 'Напишите поисковый запрос в параметре q'}
+{'q': 'x', 'top': 11} → 200 {'count': 10, 'seconds': 0.0, 'hits': [{'file': 'README.md', 'title': 'Дашборд', 'score': 1.0, 'text': '- **Примеры над карточками** — показательные студенты из тестовой выборки, модель их не видела:\n  «Высокий риск», «
+{'q': 'x', 'top': 0} → 400 {'detail': 'Параметр top должен быть больше 0'}
+{'q': 'x', 'top': 'abc'} → 422 {'detail': [{'type': 'int_parsing', 'loc': ['query', 'top'], 'msg': 'Input should be a valid integer, unable to parse string as an integer', 'input': 'abc'}]}

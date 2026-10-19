@@ -1,0 +1,53 @@
+diff --git a/app/config.py b/app/config.py
+index 07c41da..6d59fba 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -17,6 +17,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+ MODEL = os.getenv("MODEL", "qwen3.5:4b")
+ EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
+ TOP = int(os.getenv("TOP", "3"))  # фрагментов документации в промпт
++SEARCH_TOP = int(os.getenv("SEARCH_TOP", "10"))  # потолок фрагментов в /api/search: больше — уже не поиск, а выгрузка
+ 
+ HOST = os.getenv("HOST", "127.0.0.1")
+ PORT = int(os.getenv("PORT", "8001"))  # 8000 обычно занят самим ML-проектом
+diff --git a/app/main.py b/app/main.py
+index bebc5cc..6ecdec1 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -94,6 +94,20 @@ async def help_command(command: Command):
+     return StreamingResponse(stream(), media_type="application/x-ndjson")
+ 
+ 
++@app.get("/api/search")
++async def search(q: str = "", top: int = config.TOP):
++    """Фрагменты документации по запросу и секунды поиска — без модели ответа, только векторы."""
++    query = q.strip()
++    if not query:
++        raise HTTPException(status_code=400, detail="Напишите запрос: /api/search?q=<что найти в документации>")
++    if not 1 <= top <= config.SEARCH_TOP:
++        raise HTTPException(status_code=400, detail=f"top — от 1 до {config.SEARCH_TOP} фрагментов")
++    try:
++        return await rag.find(query, top)
++    except (llm.LLMError, FileNotFoundError) as exc:
++        raise HTTPException(status_code=503, detail=str(exc))
++
++
+ @app.get("/api/support/status")
+ async def support_status():
+     ollama, crm = await asyncio.gather(llm.status(), support.queue())
+diff --git a/app/rag.py b/app/rag.py
+index a8b7505..c8ef282 100644
+--- a/app/rag.py
++++ b/app/rag.py
+@@ -232,3 +232,11 @@ async def search(question, top=config.TOP):
+     """Ближайшие по смыслу фрагменты документации — по косинусу векторов bge-m3."""
+     await ensure_index()
+     return docs.nearest((await llm.embed([question]))[0], top)
++
++
++async def find(query, top=config.TOP):
++    """Фрагменты документации по запросу и время поиска — без модели ответа, только векторы bge-m3."""
++    started = time.perf_counter()
++    hits = await search(query, top)
++    return {"query": query, "hits": [{"file": h["file"], "title": h["title"], "score": h["score"], "text": h["text"]}
++                                     for h in hits], "seconds": round(time.perf_counter() - started, 2)}

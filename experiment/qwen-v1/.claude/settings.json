@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv\\Scripts\\ruff.exe check:*)",
+      "Bash(.venv\\Scripts\\python.exe -c:*)",
+      "Bash(.venv/Scripts/ruff.exe check:*)",
+      "Bash(.venv/Scripts/python.exe -c:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "PowerShell(.venv\\Scripts\\ruff.exe check:*)",
+      "PowerShell(.venv\\Scripts\\python.exe -c:*)",
+      "PowerShell(git status:*)",
+      "PowerShell(git diff:*)"
+    ]
+  }
+}
