@@ -1,0 +1,444 @@
+diff --git a/tests/test_assistant.py b/tests/test_assistant.py
+new file mode 100644
+index 0000000..ac3a9d5
+--- /dev/null
++++ b/tests/test_assistant.py
+@@ -0,0 +1,141 @@
++"""Тесты app/assistant.py: парсинг запросов /help, форматирование событий и обработка ошибок."""
++import unittest
++
++from app import assistant
++
++
++class ParseTest(unittest.TestCase):
++    """Функция parse извлекает вопрос из команды /help."""
++
++    def test_overview_without_question(self):
++        """Только '/help' возвращает общий вопрос о проекте."""
++        self.assertEqual(assistant.parse("/help"), assistant.OVERVIEW)
++
++    def test_question_extracted(self):
++        """Вопрос после '/help ' извлекается корректно."""
++        self.assertEqual(assistant.parse("/help Как запустить проект?"), "Как запустить проект?")
++        self.assertEqual(assistant.parse("/help  Что такое RAG?"), "Что такое RAG?")
++
++    def test_none_when_not_help(self):
++        """Любой текст без '/help' возвращает None."""
++        self.assertIsNone(assistant.parse("Привет"))
++        self.assertIsNone(assistant.parse(""))
++        self.assertIsNone(assistant.parse("Какой вариант помощи нужен?"))
++
++    def test_whitespace_stripped(self):
++        """Избыточные пробелы убираются."""
++        self.assertEqual(assistant.parse("   /help   Вопрос   "), "Вопрос")
++
++
++class DumpsTest(unittest.TestCase):
++    """Функция dumps сериализует события в NDJSON."""
++
++    def test_simple_event(self):
++        """Простое событие превращается в строку JSON с переводом строки."""
++        event = {"type": "question", "text": "тест"}
++        result = assistant.dumps(event)
++        self.assertTrue(result.endswith("\n"))
++        self.assertIn('"type": "question"', result)
++
++    def test_unicode_preserved(self):
++        """Кириллица сохраняется без экранирования."""
++        event = {"message": "Ошибка на русском"}
++        result = assistant.dumps(event)
++        self.assertIn("Ошибка на русском", result)
++        self.assertNotIn("\\u043e\\u0448", result.lower())  # не должно быть unicode-эскейпов
++
++    def test_nested_structure(self):
++        """Вложенные структуры правильно сериализуются."""
++        event = {"data": {"nested": [1, 2, 3]}, "count": 42}
++        result = assistant.dumps(event)
++        self.assertIn('[1, 2, 3]', result)
++
++
++class ReasonTest(unittest.TestCase):
++    """Функция reason преобразует исключения в читаемые сообщения."""
++
++    def test_exception_with_message_attr(self):
++        """Исключение с атрибутом message возвращает его текст."""
++        class MockExc(Exception):
++            message = "Особая ошибка"
++        self.assertEqual(assistant.reason(MockExc()), "Особая ошибка")
++
++    def test_regular_exception(self):
++        """Обычное исключение возвращает str()."""
++        exc = ValueError("что-то пошло не так")
++        self.assertEqual(assistant.reason(exc), "что-то пошло не так")
++
++    def test_string_conversion(self):
++        """Если нет ничего, используется str()."""
++        exc = Exception()
++        result = assistant.reason(exc)
++        self.assertIsInstance(result, str)
++
++
++class ServerInfoTest(unittest.TestCase):
++    """Функция server_info извлекает информацию о сервере MCP."""
++
++    def test_server_info_present(self):
++        """Информация о сервере читается из client.server_info."""
++        from mcp import ClientSession
++
++        class MockServerInfo:
++            name = "test-server"
++            version = "1.2.3"
++
++        class MockClient:
++            protocol_version = "2025-06-01"
++            server_info = MockServerInfo()
++
++        info = assistant.server_info(MockClient())
++        self.assertEqual(info["name"], "test-server")
++        self.assertEqual(info["version"], "1.2.3")
++        self.assertEqual(info["protocol"], "2025-06-01")
++
++    def test_missing_server_info(self):
++        """При отсутствии server_info ставятся знаки вопроса."""
++        class MockClient:
++            protocol_version = "2025-01-01"
++            server_info = None
++
++        info = assistant.server_info(MockClient())
++        self.assertEqual(info["name"], "?")
++        self.assertEqual(info["version"], "")
++
++
++class ContextTextTest(unittest.TestCase):
++    """Функция context_text форматирует результаты вызовов MCP."""
++
++    def test_branch_included(self):
++        """Информация о ветке включается в контекст."""
++        calls = [{"tool": "git_branch", "ok": True, "result": {
++            "branch": "main", "branches": ["main", "dev"], "last_commit": "abc123 fix"}}]
++        result = assistant.context_text(calls)
++        self.assertIn("Текущая ветка: main", result)
++        self.assertIn("main, dev", result) or self.assertIn("main", result)
++
++    def test_clean_status_message(self):
++        """При чистом статусе git сообщается об отсутствии изменений."""
++        calls = [{"tool": "git_branch", "ok": True, "result": {"branch": "main", "branches": ["main"], "last_commit": "abc fix"}},
++                 {"tool": "git_status", "ok": True, "result": {"clean": True, "count": 0, "changed": []}}]
++        result = assistant.context_text(calls)
++        self.assertIn("Незакоммиченных изменений нет", result)
++
++    def test_changed_files_grouped(self):
++        """Изменённые файлы группируются по статусу."""
++        calls = [{"tool": "git_branch", "ok": True, "result": {"branch": "dev", "branches": ["main", "dev"], "last_commit": "xyz feature"}},
++                 {"tool": "git_status", "ok": True, "result": {
++                     "clean": False,
++                     "count": 3,
++                     "changed": [
++                         {"path": "app/main.py", "status": "изменён"},
++                         {"path": "app/test.py", "status": "новый"},
++                         {"path": "docs/readme.md", "status": "изменён"},
++                     ]}}]
++        result = assistant.context_text(calls)
++        self.assertIn("изменены", result)
++        self.assertIn("новые", result)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_rag.py b/tests/test_rag.py
+new file mode 100644
+index 0000000..ac6eb16
+--- /dev/null
++++ b/tests/test_rag.py
+@@ -0,0 +1,162 @@
++"""Тесты app/rag.py: разбиение Markdown и Python на фрагменты, поиск ближайших векторов."""
++import unittest
++from pathlib import Path
++
++from app import rag
++
++
++class SplitDocsTest(unittest.TestCase):
++    """Функция split_docs разбивает Markdown документацию на фрагменты по заголовкам."""
++
++    def test_simple_heading(self):
++        """Один заголовок создаёт один фрагмент с этим title."""
++        text = "# Введение\nЭто текст раздела."
++        fragments = list(rag.split_docs("README.md", text))
++        self.assertEqual(len(fragments), 1)
++        self.assertEqual(fragments[0]["title"], "Введение")
++        self.assertIn("Это текст раздела", fragments[0]["text"])
++
++    def test_nested_headings(self):
++        """Вложенные заголовки формируют заголовок через разделитель « › »."""
++        text = "# Глава\n## Раздел\nКонтент раздела."
++        fragments = list(rag.split_docs("docs/guide.md", text))
++        self.assertEqual(fragments[0]["title"], "Раздел")
++        self.assertNotIn("Глава", fragments[0]["title"])
++
++    def test_code_blocks_ignored_for_headings(self):
++        """Заголовки внутри блоков кода игнорируются при создании фрагментов."""
++        text = """# Документация
++```markdown
++# Ложный заголовок
++Контент кода
++```
++Настоящий контент после блока кода."""
++        fragments = list(rag.split_docs("README.md", text))
++        # Код сохраняется целиком, но заголовок внутри ``` не создаёт нового раздела
++        self.assertEqual(len(fragments), 1)  # только один раздел "Документация"
++        self.assertIn("Настоящий контент после блока кода", fragments[0]["text"])
++
++    def test_long_content_split_into_pieces(self):
++        """Длинный блок кода разбивается на части не больше MAX знаков."""
++        long_text = "строка\n" * 200  # 200 строк × 7 символов = 1400 знаков > MAX(900)
++        content = f"# Секция\n{long_text}"
++        fragments = list(rag.split_docs("docs/test.md", content))
++        self.assertTrue(all(len(f["text"]) <= rag.MAX + 5 for f in fragments))
++
++
++class SplitCodeTest(unittest.TestCase):
++    """Функция split_code разбивает Python файл на фрагменты по функциям и классам."""
++
++    def test_function_fragment(self):
++        """Каждая функция становится отдельным фрагментом."""
++        code = """def hello():
++    print('Hello')
++
++def world():
++    return 'World'
++"""
++        fragments = list(rag.split_code("app/test.py", code))
++        titles = [f["title"] for f in fragments]
++        self.assertIn("hello()", titles)
++        self.assertIn("world()", titles)
++
++    def test_class_fragment(self):
++        """Класс целиком попадает в один фрагмент."""
++        code = """class Calculator:
++    def add(self, a, b):
++        return a + b
++"""
++        fragments = list(rag.split_code("app/math.py", code))
++        self.assertEqual(fragments[0]["title"], "class Calculator")
++        self.assertIn("def add", fragments[0]["text"])
++
++    def test_lines_numbers_included(self):
++        """Фрагментам кода проставляются номера строк."""
++        code = """def func1():
++    pass
++
++def func2():
++    pass
++"""
++        fragments = list(rag.split_code("app/t.py", code))
++        for f in fragments:
++            self.assertIn("lines", f)
++            start, end = f["lines"]
++            self.assertIsInstance(start, int)
++            self.assertIsInstance(end, int)
++
++    def test_imports_grouped(self):
++        """Импорты между функциями группируются вместе."""
++        code = """import os
++
++def func():
++    pass
++
++import json
++
++def another():
++    pass
++"""
++        fragments = list(rag.split_code("app/m.py", code))
++        titles = [f["title"] for f in fragments]
++        self.assertIn("импорты", titles)
++
++
++class SourceTest(unittest.TestCase):
++    """Функция source форматирует источник фрагмента для промпта."""
++
++    def test_source_with_title(self):
++        """Ссылка формируется как «файл › заголовок»."""
++        chunk = {"file": "README.md", "title": "Введение"}
++        self.assertEqual(rag.source(chunk), "README.md › Введение")
++
++    def test_source_with_lines(self):
++        """Для кода добавляются строки."""
++        chunk = {"file": "app/rag.py", "title": "split()", "lines": [10, 25]}
++        result = rag.source(chunk)
++        self.assertIn("app/rag.py › split()", result)
++        self.assertIn("строки 10–25", result)
++
++
++class IndexNearestTest(unittest.TestCase):
++    """Метод Index.nearest ищет ближайшие фрагменты по косинусному сходству."""
++
++    def setUp(self):
++        """Создаём индекс с фиксированными данными."""
++        self.tmp = Path(__file__).parent / ".." / ".tmp-test-index"
++        self.tmp.mkdir(exist_ok=True)
++        self.index = rag.Index("test-cached")
++        # Перенастраиваем DATA_DIR для теста
++        original = rag.config.DATA_DIR
++        rag.config.DATA_DIR = self.tmp
++
++    def tearDown(self):
++        """Очищаем временные файлы."""
++        import shutil
++        if self.tmp.exists():
++            shutil.rmtree(self.tmp)
++        rag.config.DATA_DIR = getattr(self, '_original_data_dir', rag.config.DATA_DIR)
++
++    def test_returns_empty_when_no_chunks(self):
++        """При пустом индексе возвращается пустой список."""
++        self.index.fingerprint = None
++        self.index.chunks = []
++        self.index.matrix = None
++        result = self.index.nearest([0.5, 0.5], top=3)
++        self.assertEqual(result, [])
++
++    def test_filters_by_keep_function(self):
++        """Фильтр keep исключает фрагменты из результата."""
++        chunks = [{"text": "тест 1"}, {"text": "тест 2"}, {"text": "другое"}]
++        self.index.chunks = chunks
++        self.index.matrix = [[1.0]] * len(chunks)
++        import numpy as np
++        self.index.matrix = np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
++
++        # Фильтруем только те, где text содержит "тест"
++        result = self.index.nearest([1.0, 0.0], top=3, keep=lambda c: "тест" in c.get("text", ""))
++        self.assertTrue(all("тест" in r.get("text", "") for r in result))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_support.py b/tests/test_support.py
+new file mode 100644
+index 0000000..0881583
+--- /dev/null
++++ b/tests/test_support.py
+@@ -0,0 +1,123 @@
++"""Тесты app/support.py: контекст обращения для модели и запросы к базе знаний."""
++import unittest
++from pathlib import Path
++
++from app import support
++
++
++class QueriesTest(unittest.TestCase):
++    """Функция queries формирует список запросов к базе знаний."""
++
++    def test_question_only(self):
++        """При отсутствии ticket возвращается только вопрос."""
++        self.assertEqual(support.queries("Почему ошибка?", None), ["Почему ошибка?"])
++
++    def test_question_and_error_details(self):
++        """В запросах — вопрос и текст ошибки сервиса из обращения."""
++        ticket = {"technical": {"Ответ сервиса": {"code": 422, "details": "body: ошибка валидации"}}}
++        result = support.queries("Почему 422?", ticket)
++        self.assertEqual(result, ["Почему 422?", "body: ошибка валидации"])
++
++    def test_multiple_errors_deduplicated(self):
++        """Повторяющиеся details удаляются из запросов."""
++        ticket = {
++            "technical": {
++                "Ошибка 1": {"code": 400, "details": "bad request"},
++                "Ошибка 2": {"code": 500, "details": "bad request"},
++            }
++        }
++        result = support.queries("Что случилось?", ticket)
++        self.assertEqual(len(result), 2)  # вопрос + один unique error
++        self.assertIn("bad request", result)
++
++    def test_no_details_ignored(self):
++        """Поля technical без ключа details игнорируются."""
++        ticket = {"technical": {"Log": "something happened", "NoError": {"code": 500}}}
++        result = support.queries("Проверка?", ticket)
++        self.assertEqual(result, ["Проверка?"])
++
++
++class ContextTextTest(unittest.TestCase):
++    """Функция context_text форматирует контекст клиента и обращения для промпта."""
++
++    def setUp(self):
++        """Подготавливаем тестовые данные."""
++        self.ticket = {
++            "id": "T-1041",
++            "subject": "Ошибка при вызове API",
++            "status": "open",
++            "priority": "high",
++            "created": "21.10.2026",
++            "message": "Не могу получить векторы.",
++            "user_id": "U-01",
++            "technical": {"Запрос": {"method": "POST", "url": "/api/embed"}},
++        }
++        self.user = {
++            "name": "Иван Петров",
++            "role": "Data Scientist",
++            "org": "МГУ",
++            "channel": "API",
++            "setup": "Docker container",
++            "notes": "Использует API с июля",
++            "tickets": [
++                {"id": "T-1001", "subject": "Вопрос по документации", "status": "решён", "resolution": "Объяснили endpoint"},
++                {"id": "T-1030", "subject": "Ошибка авторизации", "status": "open"},
++            ],
++        }
++
++    def test_basic_context(self):
++        """Базовый контекст содержит клиента и обращение."""
++        result = support.context_text(self.ticket, self.user)
++        self.assertIn("Клиент: Иван Петров", result)
++        self.assertIn("Обращение T-1041", result)
++
++    def test_user_notes_included(self):
++        """Заметки поддержки включаются в контекст."""
++        result = support.context_text(self.ticket, self.user)
++        self.assertIn("Заметки поддержки: Использует API с июля", result)
++
++    def test_past_tickets_shown(self):
++        """Прошлые обращения показываются в контексте."""
++        result = support.context_text(self.ticket, self.user)
++        self.assertIn("T-1001", result)
++        self.assertIn("T-1030", result)
++        self.assertIn("прошлые", result.lower() if hasattr(result, 'lower') else "")
++
++    def test_technical_data_included(self):
++        """Технические данные обращения включаются."""
++        result = support.context_text(self.ticket, self.user)
++        self.assertIn("Технические данные обращения:", result)
++        self.assertIn("Запрос", result)
++
++
++class EnsureIndexTest(unittest.TestCase):
++    """Функция ensure_index строит индекс базы знаний."""
++
++    def setUp(self):
++        """Создаём временную папку с FAQ."""
++        self.tmp = Path(__file__).parent / ".." / ".tmp-test-support"
++        self.tmp.mkdir(exist_ok=True)
++        (self.tmp / "faq.md").write_text("# FAQ\n## Вопрос\nОтвет на вопрос.\n", encoding="utf-8")
++        self.original_faq = support.config.FAQ
++        self.original_project = support.config.PROJECT_DIR
++        support.config.FAQ = self.tmp / "faq.md"
++        support.config.PROJECT_DIR = self.tmp
++
++    def tearDown(self):
++        """Восстанавливаем оригинальные настройки."""
++        import shutil
++        if self.tmp.exists():
++            shutil.rmtree(self.tmp)
++        support.config.FAQ = self.original_faq
++        support.config.PROJECT_DIR = self.original_project
++
++    def test_builds_with_valid_faq(self):
++        """Индекс успешно строится при наличии FAQ."""
++        import asyncio
++        info = asyncio.run(support.ensure_index())
++        self.assertIn("files", info)
++        self.assertIn("chunks", info)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,10 @@
+All checks passed!
+--- import app.main
+ok
+--- файлы, которые изменил Claude: tests/smoke.md
+--- тесты: python tests/run.py
+..............................
+----------------------------------------------------------------------
+Ran 30 tests in 0.001s
+
+OK

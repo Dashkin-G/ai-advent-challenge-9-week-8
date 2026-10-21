@@ -1,0 +1,151 @@
+diff --git a/tests/test_files.py b/tests/test_files.py
+new file mode 100644
+index 0000000..a017faa
+--- /dev/null
++++ b/tests/test_files.py
+@@ -0,0 +1,41 @@
++"""Тесты app/files.py: подготовка инструментов и результата для модели."""
++import unittest
++
++from app import files
++
++
++class FilesTest(unittest.TestCase):
++    def test_spec(self):
++        """Создаёт описание инструмента для Ollama без заголовков JSON Schema."""
++        tool = type('Tool', (), {
++            'name': 'list_files',
++            'description': 'Файлы проекта',
++            'input_schema': {'type': 'object', 'title': 'Schema'}
++        })()
++        result = files.spec(tool)
++        self.assertEqual(result['type'], 'function')
++        self.assertEqual(result['function']['name'], 'list_files')
++        self.assertNotIn('title', result['function'])
++        self.assertNotIn('title', result['function']['parameters'])
++
++    def test_for_model_dict(self):
++        """Dict передаётся как JSON."""
++        result = files.for_model({'count': 5})
++        self.assertIn('"count": 5', result)
++
++    def test_for_model_list_strings(self):
++        """Список строк выводится построчно."""
++        result = files.for_model({'count': 5, 'files': ['a.py', 'b.py']})
++        lines = result.split('\n')
++        self.assertIn('a.py', lines)
++        self.assertIn('b.py', lines)
++
++    def test_for_model_list_dicts(self):
++        """Список dicts выводится через разделитель."""
++        result = files.for_model([{'id': 'T-1', 'subject': 'Ошибка'}, {'id': 'T-2', 'subject': 'Вопрос'}])
++        self.assertIn('T-1', result)
++        self.assertIn('T-2', result)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/test_rag.py b/tests/test_rag.py
+new file mode 100644
+index 0000000..2786d52
+--- /dev/null
++++ b/tests/test_rag.py
+@@ -0,0 +1,46 @@
++"""Тесты app/rag.py: нарезка документации и кода на фрагменты."""
++import unittest
++
++from app import rag
++
++
++class RagSplitTest(unittest.TestCase):
++    def test_split_docs_heading(self):
++        """Разбивает Markdown по заголовкам."""
++        text = '# README\n\n## Запуск\n\nКоманда uvicorn'
++        chunks = list(rag.split_docs('README.md', text))
++        self.assertEqual(len(chunks), 1)
++        self.assertEqual(chunks[0]['title'], 'Запуск')
++        self.assertEqual(chunks[0]['text'], 'Команда uvicorn')
++        self.assertEqual(chunks[0]['kind'], 'docs')
++
++    def test_split_code_function(self):
++        """Функция целиком — один фрагмент с номерами строк."""
++        code = 'def hello():\n    return 42'
++        chunks = list(rag.split_code('app/test.py', code))
++        self.assertEqual(len(chunks), 1)
++        self.assertEqual(chunks[0]['title'], 'hello()')
++        self.assertEqual(chunks[0]['lines'], [1, 2])
++        self.assertEqual(chunks[0]['kind'], 'code')
++
++    def test_split_code_class(self):
++        """Класс целиком — один фрагмент."""
++        code = 'class Index:\n    def build(self):\n        pass'
++        chunks = list(rag.split_code('app/rag.py', code))
++        self.assertEqual(len(chunks), 1)
++        self.assertEqual(chunks[0]['title'], 'class Index')
++        self.assertEqual(chunks[0]['lines'], [1, 3])
++
++    def test_source(self):
++        """source формирует заголовок для ссылки."""
++        chunk = {'file': 'README.md', 'title': 'Запуск'}
++        self.assertEqual(rag.source(chunk), 'README.md › Запуск')
++
++    def test_source_with_lines(self):
++        """У кода включаются номера строк."""
++        chunk = {'file': 'app/test.py', 'title': 'hello()', 'lines': [1, 5]}
++        self.assertEqual(rag.source(chunk), 'app/test.py › hello(), строки 1–5')
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/test_support.py b/tests/test_support.py
+new file mode 100644
+index 0000000..d008a63
+--- /dev/null
++++ b/tests/test_support.py
+@@ -0,0 +1,46 @@
++"""Тесты app/support.py: контекст обращения и запросы к базе знаний."""
++import unittest
++
++from app import support
++
++
++class SupportTest(unittest.TestCase):
++    def test_context_text(self):
++        """Формирует текст клиента и обращения для промпта."""
++        ticket = {'id': 'T-1041', 'subject': 'Ошибка', 'status': 'open', 'priority': 'high',
++                  'created': '2026-10-20', 'message': 'Не запускается', 'technical': {}}
++        user = {'name': 'Иван', 'role': 'разработчик', 'org': 'Компания', 'channel': 'API',
++                'setup': 'Docker', 'notes': '', 'tickets': []}
++        result = support.context_text(ticket, user)
++        self.assertIn('Клиент: Иван', result)
++        self.assertIn('приоритет high', result)
++        self.assertIn('Сообщение клиента: Не запускается', result)
++
++    def test_context_text_with_past_tickets(self):
++        """Включает прошлые обращения клиента в текст контекста."""
++        ticket = {'id': 'T-1041', 'subject': 'Ошибка', 'status': 'open', 'priority': 'high',
++                  'created': '2026-10-20', 'message': 'Не запускается', 'technical': {}}
++        user = {'name': 'Иван', 'role': 'разработчик', 'org': 'Компания', 'channel': 'API',
++                'setup': 'Docker', 'notes': '', 'tickets': [
++                    {'id': 'T-1000', 'subject': 'Проблема', 'status': 'closed', 'resolution': 'Закончено'}
++                ]}
++        result = support.context_text(ticket, user)
++        self.assertIn('Прошлые обращения', result)
++        self.assertIn('T-1000', result)
++        self.assertIn('Закончено', result)
++
++    def test_queries(self):
++        """Запросы включают вопрос и технические ошибки из обращения."""
++        question = 'Почему 422?'
++        ticket = {'technical': {'body: validation error': {'details': 'body: ошибка'}}}
++        result = support.queries(question, ticket)
++        self.assertEqual(result, ['Почему 422?', 'body: ошибка'])
++
++    def test_queries_no_errors(self):
++        """Без технических данных — только вопрос."""
++        result = support.queries('Как запустить?', None)
++        self.assertEqual(result, ['Как запустить?'])
++
++
++if __name__ == '__main__':
++    unittest.main()

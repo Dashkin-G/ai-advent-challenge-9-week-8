@@ -7,11 +7,15 @@
 #                       день 37: профиль .claude\agents\bug-fix.md, задача и её проверка — experiment\tasks\bug-fix.*
 #   .\experiment\generate.ps1 commit-check-v1 -Agent commit-check -Clone -Model qwen3.5-122b-a10b
 #                       -Clone: копия с историей git и незакоммиченными правками проекта — то, что уйдёт в коммит
+#   .\experiment\generate.ps1 qa-tests-v1 -Agent qa -Task qa-tests -Clone -Model qwen3.5-122b-a10b
+#                       день 38: у профиля несколько задач — -Task выбирает experiment\tasks\<задача>.md; MCP-серверы —
+#                       из .mcp.json копии; отчёты QA со скриншотами (reports\) — в experiment\<имя>\reports\
 # Репозиторий не меняется: Claude работает в копии в %TEMP%\claude-rules\<имя>, итог — в experiment\<имя>\.
 param(
     [Parameter(Mandatory)][string]$Name,
     [string]$Rules,
     [string]$Agent,
+    [string]$Task,
     [switch]$Clone,
     [ValidateSet("alibaba", "claude")][string]$Provider = "alibaba",
     [string]$Model
@@ -20,15 +24,16 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $PSScriptRoot $Name
 $rulesDir = if ($Rules) { Join-Path $PSScriptRoot "rules\$Rules" } else { $root }
-$task = if ($Agent) { Join-Path $PSScriptRoot "tasks\$Agent.md" } else { Join-Path $PSScriptRoot "prompt.md" }
-$check = if ($Agent) { Join-Path $PSScriptRoot "tasks\$Agent.py" } else { Join-Path $PSScriptRoot "smoke.py" }  # если есть
+if ($Agent -and -not $Task) { $Task = $Agent }  # задача профиля по умолчанию — tasks\<профиль>.md
+$prompt = if ($Task) { Join-Path $PSScriptRoot "tasks\$Task.md" } else { Join-Path $PSScriptRoot "prompt.md" }
+$check = if ($Task) { Join-Path $PSScriptRoot "tasks\$Task.py" } else { Join-Path $PSScriptRoot "smoke.py" }  # если есть
 # копия вне проекта: иначе Claude подхватил бы ещё и CLAUDE.md из папок выше
 $work = Join-Path $env:TEMP "claude-rules\$Name"
 if ((Test-Path $out) -or (Test-Path $work)) { throw "experiment\$Name или $work уже есть — выберите другое имя" }
 if ($Clone -and $Rules) { throw "-Clone берёт правила проекта как есть — без -Rules" }
 if (-not (Test-Path "$rulesDir\CLAUDE.md")) { throw "Нет правил $rulesDir\CLAUDE.md" }
 if ($Agent -and -not (Test-Path "$rulesDir\.claude\agents\$Agent.md")) { throw "Нет профиля $rulesDir\.claude\agents\$Agent.md" }
-if (-not (Test-Path $task)) { throw "Нет задачи $task" }
+if (-not (Test-Path $prompt)) { throw "Нет задачи $prompt" }
 
 # Qwen через Anthropic-совместимый адрес DashScope; переменные — только на время прогона
 $vars = @{}
@@ -98,39 +103,45 @@ $params = @("-p", "--permission-mode", "acceptEdits", "--output-format", "stream
 if ($Agent) { $params += @("--agent", $Agent) }
 # permissions из .claude/settings.json в незнакомой папке не действуют — те же разрешения флагом
 $params += @("--allowedTools") + ((Get-Content "$rulesDir\.claude\settings.json" -Raw | ConvertFrom-Json).permissions.allow)
+# MCP-серверы проекта (.mcp.json) там же без подтверждения не запускаются — тоже флагом; чужие MCP из глобального конфига не нужны
+if (Test-Path "$work\.mcp.json") { $params += @("--mcp-config", "$work\.mcp.json", "--strict-mcp-config") }
 if ($Model) { $params += @("--model", $Model) }
 $saved = @{}
 foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); Set-Item "env:$k" $vars[$k] }
 $started = Get-Date
 Push-Location $work
 try {
-    Get-Content $task -Raw -Encoding utf8 | claude @params | Set-Content "$out\log.jsonl" -Encoding utf8
+    Get-Content $prompt -Raw -Encoding utf8 | claude @params | Set-Content "$out\log.jsonl" -Encoding utf8
 } finally {
     Pop-Location
     foreach ($k in $vars.Keys) { if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } else { Set-Item "env:$k" $saved[$k] } }
 }
 $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds)
 $after = Snapshot
+if (Test-Path "$work\reports") { Copy-Item "$work\reports" $out -Recurse }  # отчёты QA со скриншотами
 
 # Итог: модель и чей ключ, ответ, ходы, токены, какие инструменты, субагенты и скиллы звал Claude
 $events = Get-Content "$out\log.jsonl" -Encoding utf8 | ForEach-Object { $_ | ConvertFrom-Json }
-$result = $events | Where-Object type -eq "result" | Select-Object -Last 1
+# первый result — основная работа; следующие — ответы на уведомления о фоновых задачах (сервер для smoke), их ходы и
+# токены — тоже в счёт
+$results = @($events | Where-Object type -eq "result")
 $init = $events | Where-Object { $_.type -eq "system" -and $_.subtype -eq "init" } | Select-Object -First 1
 $tools = $events | Where-Object type -eq "assistant" | ForEach-Object { $_.message.content } | Where-Object type -eq "tool_use"
 $named = $tools | ForEach-Object { if ($_.name -in "Task", "Agent") { "Agent:$($_.input.subagent_type)" } elseif ($_.name -eq "Skill") { "Skill:$($_.input.skill)" } else { $_.name } }
 $denied = ($events | Where-Object type -eq "user" | ForEach-Object { $_.message.content } | Where-Object { $_.is_error }).Count
-$usage = $result.usage
-$what = if ($Agent) { "профиль $Agent" } else { "правила: $(if ($Rules) { $Rules } else { 'текущие' })" }
+$tokensIn = ($results | ForEach-Object { $_.usage.input_tokens + $_.usage.cache_read_input_tokens + $_.usage.cache_creation_input_tokens } | Measure-Object -Sum).Sum
+$tokensOut = ($results | ForEach-Object { $_.usage.output_tokens } | Measure-Object -Sum).Sum
+$what = if ($Agent) { "профиль $Agent$(if ($Task -ne $Agent) { ", задача $Task" })" } else { "правила: $(if ($Rules) { $Rules } else { 'текущие' })" }
 @(
     "# Прогон $Name — $($init.model) ($Provider), $what, $($started.ToString('dd.MM.yyyy HH:mm'))",
     "",
-    "Время: $seconds с · ходов: $($result.num_turns) · ошибок инструментов: $denied · " +
-    "токенов: вход $($usage.input_tokens + $usage.cache_read_input_tokens + $usage.cache_creation_input_tokens), выход $($usage.output_tokens)",
+    "Время: $seconds с · ходов: $(($results | Measure-Object num_turns -Sum).Sum) · ошибок инструментов: $denied · " +
+    "токенов: вход $tokensIn, выход $tokensOut",
     "Инструменты: $(($named | Group-Object | ForEach-Object { "$($_.Name) ×$($_.Count)" }) -join ', ')",
     "",
     "## Ответ Claude Code",
     "",
-    $result.result
+    $results[0].result
 ) | Set-Content "$out\result.md" -Encoding utf8
 
 git -C $work diff $before $after | Set-Content "$out\changes.diff" -Encoding utf8
@@ -138,11 +149,17 @@ Push-Location $work
 try {
     $env:PROJECT_DIR = $vars["PROJECT_DIR"]
     $env:PYTHONUTF8 = "1"
-    & .venv\Scripts\ruff.exe check app 2>&1 | Set-Content "$out\checks.txt" -Encoding utf8
+    $lint = @("app") + @(if (Test-Path tests) { "tests" })
+    & .venv\Scripts\ruff.exe check @lint 2>&1 | Set-Content "$out\checks.txt" -Encoding utf8
     "--- import app.main" | Add-Content "$out\checks.txt" -Encoding utf8
     & .venv\Scripts\python.exe -c "import app.main; print('ok')" 2>&1 | Add-Content "$out\checks.txt" -Encoding utf8
     $edited = @(git -c core.quotepath=false diff --name-only $before $after)
     "--- файлы, которые изменил Claude: $(if ($edited) { $edited -join ', ' } else { 'нет' })" | Add-Content "$out\checks.txt" -Encoding utf8
+    if (Test-Path "tests\test_*.py") {
+        "--- тесты: python tests/run.py" | Add-Content "$out\checks.txt" -Encoding utf8
+        # unittest пишет в stderr — склеивает cmd, чтобы PowerShell не считал строки вывода ошибками
+        cmd /c ".venv\Scripts\python.exe tests\run.py 2>&1" | Add-Content "$out\checks.txt" -Encoding utf8
+    }
     if (Test-Path $check) {
         "--- проверка задачи: experiment\$($check.Substring($PSScriptRoot.Length + 1))" | Add-Content "$out\checks.txt" -Encoding utf8
         & .venv\Scripts\python.exe $check 2>$null | Add-Content "$out\checks.txt" -Encoding utf8

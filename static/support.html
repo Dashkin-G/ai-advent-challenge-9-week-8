@@ -72,7 +72,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Очередь */
 .queue-card { padding: 14px 12px 12px; }
 .queue-card h2 { padding: 0 6px; }
+.find { width: 100%; margin: 0 0 8px; font: 16px var(--ui); color: var(--text); background: var(--field); border: 1px solid var(--line);
+  border-radius: 10px; padding: 7px 12px; outline: none; }
+.find:focus { border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy-soft); }
 .queue { display: grid; gap: 5px; }
+.queue .none { padding: 4px 8px; }
 .item { display: block; width: 100%; text-align: left; background: var(--field); border: 1px solid var(--line); border-radius: 10px;
   padding: 6px 12px 7px; }
 .item:hover { border-color: var(--navy); }
@@ -198,6 +202,7 @@ pre { margin: 6px 0 2px; padding: 8px 10px; background: var(--card); border-radi
   <div class="desk">
     <aside class="card queue-card">
       <h2>Очередь <span class="hint" id="queueHint">MCP · crm</span></h2>
+      <input class="find" id="find" type="search" autocomplete="off" spellcheck="false" placeholder="Номер, тема или клиент" aria-label="Поиск по очереди">
       <div class="queue" id="queue"></div>
     </aside>
 
@@ -282,14 +287,19 @@ async function loadStatus() {
 }
 
 function renderQueue() {
-  $("queue").innerHTML = tickets.map(t => `<button class="item" type="button" data-id="${esc(t.id)}">
+  const q = $("find").value.trim().toLowerCase();
+  const shown = tickets.filter(t => !q || [t.id, t.subject, t.user.name, t.user.org].some(s => s.toLowerCase().includes(q)));
+  $("queue").innerHTML = (shown.length ? "" : '<div class="none">Ничего не нашлось</div>') + shown.map(t => `<button class="item" type="button" data-id="${esc(t.id)}">
       <span class="row"><span class="prio ${PRIO[t.priority] || ""}" title="приоритет ${esc(t.priority)}"></span>
         <span><b>${esc(t.id)}</b> · ${esc(t.status)}</span><span class="when">${when(t.created)}</span></span>
       <span class="subj">${esc(t.subject)}</span>
       <span class="who">${esc(t.user.name)} · ${esc(t.user.org)}</span></button>`).join("")
     + `<button class="item free" type="button" data-id=""><span class="subj">Вопрос о продукте</span>
       <span class="who">без тикета — только база знаний</span></button>`;
+  // перерисовка снимает выделение — выбранное обращение подсвечиваем снова
+  document.querySelectorAll(".item").forEach(b => b.classList.toggle("sel", b.dataset.id === (current ? current.id : "")));
 }
+$("find").addEventListener("input", renderQueue);
 $("queue").addEventListener("click", e => {
   const item = e.target.closest(".item");
   if (!item) return;

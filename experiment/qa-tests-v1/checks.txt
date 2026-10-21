@@ -1,0 +1,10 @@
+All checks passed!
+--- import app.main
+ok
+--- файлы, которые изменил Claude: tests/test_assistant.py, tests/test_rag.py, tests/test_support.py
+--- тесты: python -m unittest discover -s tests
+....................................
+----------------------------------------------------------------------
+Ran 36 tests in 0.008s
+
+OK

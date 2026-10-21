@@ -10,7 +10,8 @@
 - Pydantic — только тела запросов в `main.py`. Своих классов почти нет: модули с функциями.
 - Фронт — по одному `static/*.html` на страницу: чистый HTML + CSS + JS в одном файле, без сборки и фреймворков.
 - Зависимости — `requirements.txt` без версий. Новую зависимость добавлять только если без неё никак.
-- Тестов нет. Проверка — линтер, импорт и ручной прогон (см. «Проверка»).
+- Тесты — `unittest` из стандартной библиотеки в `tests/`; smoke-сценарии UI — `tests/smoke.md`, их проходит агент `qa`
+  через Playwright MCP (`.mcp.json`).
 
 ## Структура
 
@@ -25,6 +26,7 @@ app/main.py       FastAPI: страницы, /api/*, MCP-серверы смон
 static/*.html     страницы: index (/help), support, files
 support/          данные поддержки: faq.md, crm.json
 data/             кэш векторов (в .gitignore)
+tests/            тесты unittest, run.py — их прогон без Ollama и data/; smoke.md — сценарии UI, serve.py — приложение для них
 ```
 
 Слои: `main.py` знает про HTTP и только вызывает функции модулей. Модули фич не импортируют FastAPI.
@@ -160,8 +162,9 @@ async def run(question):
 (`claude -p`) просто не выполнятся.
 
 ```
-.venv/Scripts/ruff.exe check app
+.venv/Scripts/ruff.exe check app tests
 .venv/Scripts/python.exe -c "import app.main"
+.venv/Scripts/python.exe tests/run.py
 ```
 
 Новый или изменённый эндпоинт — вызвать его без Ollama: `TestClient` без `with` (lifespan с MCP и прогревом
@@ -194,3 +197,5 @@ for params in ({'question': 'как запустить'}, {'question': ''}, {'qu
 - Скилл `new-endpoint` — порядок работы над новым эндпоинтом.
 - Агент `style-reviewer` — после нового модуля или правок больше чем в трёх файлах. Он заново читает правила и
   весь diff, поэтому мелкую правку проверяй сам командами из «Проверки».
+- Агент `qa` — после PR и после новой фичи: тесты кода и smoke-сценарии через Playwright MCP, единый отчёт со скриншотами
+  в `reports/`.
