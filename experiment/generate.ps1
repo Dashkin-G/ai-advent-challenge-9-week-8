@@ -1,12 +1,18 @@
-# Одна генерация боевой задачи: Claude Code в чистой копии проекта с выбранными правилами → diff, проверки, итог.
+# Один прогон Claude Code в копии проекта без человека → diff, проверки, итог.
 # Запуск из корня проекта:
-#   .\experiment\generate.ps1 qwen-v1 -Rules v1     правила из experiment\rules\v1, модель Qwen (DashScope)
-#   .\experiment\generate.ps1 qwen-v2               текущие правила проекта (CLAUDE.md и .claude в корне)
+#   .\experiment\generate.ps1 qwen-v1 -Rules v1     день 36: правила из experiment\rules\v1, задача experiment\prompt.md
+#   .\experiment\generate.ps1 qwen-v2               день 36: текущие правила проекта (CLAUDE.md и .claude в корне)
 #   .\experiment\generate.ps1 opus-v2 -Provider claude   модель из настроек claude, по подписке
+#   .\experiment\generate.ps1 bug-fix-v1 -Agent bug-fix -Model qwen3.5-122b-a10b
+#                       день 37: профиль .claude\agents\bug-fix.md, задача и её проверка — experiment\tasks\bug-fix.*
+#   .\experiment\generate.ps1 commit-check-v1 -Agent commit-check -Clone -Model qwen3.5-122b-a10b
+#                       -Clone: копия с историей git и незакоммиченными правками проекта — то, что уйдёт в коммит
 # Репозиторий не меняется: Claude работает в копии в %TEMP%\claude-rules\<имя>, итог — в experiment\<имя>\.
 param(
     [Parameter(Mandatory)][string]$Name,
     [string]$Rules,
+    [string]$Agent,
+    [switch]$Clone,
     [ValidateSet("alibaba", "claude")][string]$Provider = "alibaba",
     [string]$Model
 )
@@ -14,10 +20,15 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $PSScriptRoot $Name
 $rulesDir = if ($Rules) { Join-Path $PSScriptRoot "rules\$Rules" } else { $root }
+$task = if ($Agent) { Join-Path $PSScriptRoot "tasks\$Agent.md" } else { Join-Path $PSScriptRoot "prompt.md" }
+$check = if ($Agent) { Join-Path $PSScriptRoot "tasks\$Agent.py" } else { Join-Path $PSScriptRoot "smoke.py" }  # если есть
 # копия вне проекта: иначе Claude подхватил бы ещё и CLAUDE.md из папок выше
 $work = Join-Path $env:TEMP "claude-rules\$Name"
 if ((Test-Path $out) -or (Test-Path $work)) { throw "experiment\$Name или $work уже есть — выберите другое имя" }
+if ($Clone -and $Rules) { throw "-Clone берёт правила проекта как есть — без -Rules" }
 if (-not (Test-Path "$rulesDir\CLAUDE.md")) { throw "Нет правил $rulesDir\CLAUDE.md" }
+if ($Agent -and -not (Test-Path "$rulesDir\.claude\agents\$Agent.md")) { throw "Нет профиля $rulesDir\.claude\agents\$Agent.md" }
+if (-not (Test-Path $task)) { throw "Нет задачи $task" }
 
 # Qwen через Anthropic-совместимый адрес DashScope; переменные — только на время прогона
 $vars = @{}
@@ -43,23 +54,48 @@ if ($Provider -eq "alibaba") {
     }
 }
 $vars["PROJECT_DIR"] = (Resolve-Path (Join-Path $root "..\ml-student-dropout")).Path  # копия не рядом с ML-проектом
-
-New-Item -ItemType Directory $out, $work | Out-Null
-foreach ($item in "app", "static", "support", "requirements.txt", "ruff.toml", ".gitignore") {
-    Copy-Item (Join-Path $root $item) $work -Recurse
-}
-Copy-Item "$rulesDir\CLAUDE.md", "$rulesDir\.claude" $work -Recurse
-Copy-Item "$rulesDir\CLAUDE.md", "$rulesDir\.claude" $out -Recurse  # с какими правилами шла генерация
-Get-ChildItem $work -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
-New-Item -ItemType Junction (Join-Path $work ".venv") -Target (Join-Path $root ".venv") | Out-Null  # команды проверки из CLAUDE.md
-Add-Content "$work\.gitignore" ".venv"  # «.venv/» не ловит ссылку-junction
-git -C $work init -q
-git -C $work config core.autocrlf false  # копия — только ради diff, концы строк не трогаем
-git -C $work add -A
-git -C $work -c user.name=baseline -c user.email=baseline@example.com commit -q -m baseline
-
 $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+
+New-Item -ItemType Directory $out | Out-Null
+if ($Clone) {
+    git clone -q $root $work  # история и текущая ветка — как в проекте
+    # незакоммиченное — поверх; игнорируемое (.env, data, CLAUDE.local.md) в копию не попадает
+    $changed = @(git -C $root -c core.quotepath=false diff --name-only HEAD) +
+               @(git -C $root -c core.quotepath=false ls-files --others --exclude-standard)
+    foreach ($file in $changed) {
+        $target = Join-Path $work $file
+        if (Test-Path (Join-Path $root $file)) {
+            New-Item -ItemType Directory (Split-Path $target) -Force | Out-Null
+            Copy-Item (Join-Path $root $file) $target
+        } else { Remove-Item $target }  # удалён в проекте
+    }
+} else {
+    New-Item -ItemType Directory $work | Out-Null
+    foreach ($item in "app", "static", "support", "requirements.txt", "ruff.toml", ".gitignore") {
+        Copy-Item (Join-Path $root $item) $work -Recurse
+    }
+    Copy-Item "$rulesDir\CLAUDE.md", "$rulesDir\.claude" $work -Recurse
+    Get-ChildItem $work -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+    git -C $work init -q
+    git -C $work config core.autocrlf false  # копия — только ради diff, концы строк не трогаем
+}
+Copy-Item "$rulesDir\CLAUDE.md", "$rulesDir\.claude" $out -Recurse  # с какими правилами и профилями шёл прогон
+Add-Content "$work\.git\info\exclude" ".venv"  # «.venv/» из .gitignore не ловит ссылку-junction
+New-Item -ItemType Junction (Join-Path $work ".venv") -Target (Join-Path $root ".venv") | Out-Null  # команды проверки из CLAUDE.md
+if (-not $Clone) {
+    git -C $work add -A
+    git -C $work -c user.name=baseline -c user.email=baseline@example.com commit -q -m baseline
+}
+
+# Снимок рабочей папки копии — дерево git через отдельный индекс: индекс копии, который видит Claude, не меняется
+function Snapshot {
+    $env:GIT_INDEX_FILE = "$work\.git\snapshot-index"
+    try { git -C $work add -A | Out-Null; git -C $work write-tree } finally { Remove-Item env:GIT_INDEX_FILE }
+}
+$before = Snapshot
+
 $params = @("-p", "--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose")
+if ($Agent) { $params += @("--agent", $Agent) }
 # permissions из .claude/settings.json в незнакомой папке не действуют — те же разрешения флагом
 $params += @("--allowedTools") + ((Get-Content "$rulesDir\.claude\settings.json" -Raw | ConvertFrom-Json).permissions.allow)
 if ($Model) { $params += @("--model", $Model) }
@@ -68,12 +104,13 @@ foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable(
 $started = Get-Date
 Push-Location $work
 try {
-    Get-Content "$PSScriptRoot\prompt.md" -Raw -Encoding utf8 | claude @params | Set-Content "$out\log.jsonl" -Encoding utf8
+    Get-Content $task -Raw -Encoding utf8 | claude @params | Set-Content "$out\log.jsonl" -Encoding utf8
 } finally {
     Pop-Location
     foreach ($k in $vars.Keys) { if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } else { Set-Item "env:$k" $saved[$k] } }
 }
 $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds)
+$after = Snapshot
 
 # Итог: модель и чей ключ, ответ, ходы, токены, какие инструменты, субагенты и скиллы звал Claude
 $events = Get-Content "$out\log.jsonl" -Encoding utf8 | ForEach-Object { $_ | ConvertFrom-Json }
@@ -83,8 +120,9 @@ $tools = $events | Where-Object type -eq "assistant" | ForEach-Object { $_.messa
 $named = $tools | ForEach-Object { if ($_.name -in "Task", "Agent") { "Agent:$($_.input.subagent_type)" } elseif ($_.name -eq "Skill") { "Skill:$($_.input.skill)" } else { $_.name } }
 $denied = ($events | Where-Object type -eq "user" | ForEach-Object { $_.message.content } | Where-Object { $_.is_error }).Count
 $usage = $result.usage
+$what = if ($Agent) { "профиль $Agent" } else { "правила: $(if ($Rules) { $Rules } else { 'текущие' })" }
 @(
-    "# Генерация $Name — $($init.model) ($Provider), правила: $(if ($Rules) { $Rules } else { 'текущие' }), $($started.ToString('dd.MM.yyyy HH:mm'))",
+    "# Прогон $Name — $($init.model) ($Provider), $what, $($started.ToString('dd.MM.yyyy HH:mm'))",
     "",
     "Время: $seconds с · ходов: $($result.num_turns) · ошибок инструментов: $denied · " +
     "токенов: вход $($usage.input_tokens + $usage.cache_read_input_tokens + $usage.cache_creation_input_tokens), выход $($usage.output_tokens)",
@@ -95,16 +133,19 @@ $usage = $result.usage
     $result.result
 ) | Set-Content "$out\result.md" -Encoding utf8
 
-git -C $work add -A
-git -C $work diff --cached | Set-Content "$out\changes.diff" -Encoding utf8
+git -C $work diff $before $after | Set-Content "$out\changes.diff" -Encoding utf8
 Push-Location $work
 try {
+    $env:PROJECT_DIR = $vars["PROJECT_DIR"]
+    $env:PYTHONUTF8 = "1"
     & .venv\Scripts\ruff.exe check app 2>&1 | Set-Content "$out\checks.txt" -Encoding utf8
     "--- import app.main" | Add-Content "$out\checks.txt" -Encoding utf8
     & .venv\Scripts\python.exe -c "import app.main; print('ok')" 2>&1 | Add-Content "$out\checks.txt" -Encoding utf8
-    "--- GET /api/search без Ollama (experiment\smoke.py)" | Add-Content "$out\checks.txt" -Encoding utf8
-    $env:PROJECT_DIR = $vars["PROJECT_DIR"]
-    $env:PYTHONUTF8 = "1"
-    & .venv\Scripts\python.exe "$PSScriptRoot\smoke.py" 2>$null | Add-Content "$out\checks.txt" -Encoding utf8
+    $edited = @(git -c core.quotepath=false diff --name-only $before $after)
+    "--- файлы, которые изменил Claude: $(if ($edited) { $edited -join ', ' } else { 'нет' })" | Add-Content "$out\checks.txt" -Encoding utf8
+    if (Test-Path $check) {
+        "--- проверка задачи: experiment\$($check.Substring($PSScriptRoot.Length + 1))" | Add-Content "$out\checks.txt" -Encoding utf8
+        & .venv\Scripts\python.exe $check 2>$null | Add-Content "$out\checks.txt" -Encoding utf8
+    }
 } finally { Pop-Location; Remove-Item env:PROJECT_DIR, env:PYTHONUTF8 -ErrorAction SilentlyContinue }
 Write-Host "Готово за $seconds с: experiment\$Name\ — result.md, changes.diff, checks.txt; копия проекта — $work"

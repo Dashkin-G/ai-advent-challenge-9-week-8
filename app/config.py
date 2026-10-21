@@ -20,9 +20,11 @@ TOP = int(os.getenv("TOP", "3"))  # фрагментов документаци�
 
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8001"))  # 8000 обычно занят самим ML-проектом
-MCP_URL = f"http://{HOST}:{PORT}/mcp/git/"
-CRM_MCP_URL = f"http://{HOST}:{PORT}/mcp/crm/"
-FILES_MCP_URL = f"http://{HOST}:{PORT}/mcp/files/"
+# Для внутреннего обращения MCP используем localhost независимо от HOST (0.0.0.0 нельзя использовать как клиентский адрес)
+_mcp_host = "127.0.0.1" if HOST == "0.0.0.0" else HOST
+MCP_URL = f"http://{_mcp_host}:{PORT}/mcp/git/"
+CRM_MCP_URL = f"http://{_mcp_host}:{PORT}/mcp/crm/"
+FILES_MCP_URL = f"http://{_mcp_host}:{PORT}/mcp/files/"
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 
 # Запросы к себе (MCP) и к Ollama — мимо системного прокси

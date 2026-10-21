@@ -1,0 +1,4 @@
+All checks passed!
+--- import app.main
+ok
+--- файлы, которые изменил Claude: нет
