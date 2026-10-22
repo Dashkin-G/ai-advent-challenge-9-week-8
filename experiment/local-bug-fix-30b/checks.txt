@@ -1,0 +1,7 @@
+All checks passed!
+--- import app.main
+ok
+--- файлы, которые изменил Claude: нет
+--- проверка задачи: experiment\tasks\bug-fix.py
+HOST=0.0.0.0: git ✗ Server returned an error response · crm ✗ Server returned an error response · files ✗ Server returned an error response
+HOST=127.0.0.1: git ✓ ветка main · crm ✓ обращений 7 · files ✓ контекст получен

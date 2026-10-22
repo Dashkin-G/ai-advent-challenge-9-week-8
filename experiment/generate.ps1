@@ -10,6 +10,10 @@
 #   .\experiment\generate.ps1 qa-tests-v1 -Agent qa -Task qa-tests -Clone -Model qwen3.5-122b-a10b
 #                       день 38: у профиля несколько задач — -Task выбирает experiment\tasks\<задача>.md; MCP-серверы —
 #                       из .mcp.json копии; отчёты QA со скриншотами (reports\) — в experiment\<имя>\reports\
+#   .\experiment\generate.ps1 local-4b -Provider ollama -Model qwen3.5:4b -Rules qwen-v2 -Ref e9565b9
+#                       день 39: локальная модель через Anthropic-совместимый API Ollama; -Rules <прогон> — правила,
+#                       с которыми шёл облачный прогон; -Ref — код из коммита (для bug-fix — с багом, до фикса дня 37);
+#                       -Context и -Gpu — контекст и слоёв на видеокарте: вариант модели в Ollama, например qwen3-coder:30b-48k-gpu32
 # Репозиторий не меняется: Claude работает в копии в %TEMP%\claude-rules\<имя>, итог — в experiment\<имя>\.
 param(
     [Parameter(Mandatory)][string]$Name,
@@ -17,25 +21,30 @@ param(
     [string]$Agent,
     [string]$Task,
     [switch]$Clone,
-    [ValidateSet("alibaba", "claude")][string]$Provider = "alibaba",
-    [string]$Model
+    [string]$Ref,
+    [ValidateSet("alibaba", "claude", "ollama")][string]$Provider = "alibaba",
+    [string]$Model,
+    [int]$Context = 65536,  # контекст локальной модели: промпт Claude Code ~25 тыс. токенов + файлы и вывод команд
+    [int]$Gpu = -1  # слоёв локальной модели на видеокарте; -1 — сколько решит Ollama
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $PSScriptRoot $Name
-$rulesDir = if ($Rules) { Join-Path $PSScriptRoot "rules\$Rules" } else { $root }
+# -Rules: версия из experiment\rules\ или правила, которые сохранил прошлый прогон в experiment\<прогон>\
+$rulesDir = if (-not $Rules) { $root } elseif (Test-Path "$PSScriptRoot\rules\$Rules") { "$PSScriptRoot\rules\$Rules" } else { "$PSScriptRoot\$Rules" }
 if ($Agent -and -not $Task) { $Task = $Agent }  # задача профиля по умолчанию — tasks\<профиль>.md
 $prompt = if ($Task) { Join-Path $PSScriptRoot "tasks\$Task.md" } else { Join-Path $PSScriptRoot "prompt.md" }
 $check = if ($Task) { Join-Path $PSScriptRoot "tasks\$Task.py" } else { Join-Path $PSScriptRoot "smoke.py" }  # если есть
 # копия вне проекта: иначе Claude подхватил бы ещё и CLAUDE.md из папок выше
 $work = Join-Path $env:TEMP "claude-rules\$Name"
 if ((Test-Path $out) -or (Test-Path $work)) { throw "experiment\$Name или $work уже есть — выберите другое имя" }
-if ($Clone -and $Rules) { throw "-Clone берёт правила проекта как есть — без -Rules" }
+if ($Clone -and ($Rules -or $Ref)) { throw "-Clone берёт проект как есть — без -Rules и -Ref" }
 if (-not (Test-Path "$rulesDir\CLAUDE.md")) { throw "Нет правил $rulesDir\CLAUDE.md" }
 if ($Agent -and -not (Test-Path "$rulesDir\.claude\agents\$Agent.md")) { throw "Нет профиля $rulesDir\.claude\agents\$Agent.md" }
 if (-not (Test-Path $prompt)) { throw "Нет задачи $prompt" }
 
-# Qwen через Anthropic-совместимый адрес DashScope; переменные — только на время прогона
+# Qwen через Anthropic-совместимый адрес DashScope или локальная модель через такой же API Ollama;
+# переменные — только на время прогона
 $vars = @{}
 if ($Provider -eq "alibaba") {
     if (-not $Model) { $Model = "qwen3.5-plus-2026-02-15" }
@@ -48,15 +57,33 @@ if ($Provider -eq "alibaba") {
     }
     if (-not $key) { throw "Нет ключа DASHSCOPE_API_KEY — задайте переменную или положите .env в корень" }
     $vars = @{
-        ANTHROPIC_BASE_URL                       = "https://ws-q1vxaj37wm4fa9q8.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
-        ANTHROPIC_AUTH_TOKEN                     = $key
-        ANTHROPIC_MODEL                          = $Model
-        ANTHROPIC_DEFAULT_OPUS_MODEL             = $Model
-        ANTHROPIC_DEFAULT_SONNET_MODEL           = $Model
-        ANTHROPIC_DEFAULT_HAIKU_MODEL            = $Model  # фоновые задачи — тоже Qwen, не подписка
-        CLAUDE_CODE_SUBAGENT_MODEL               = $Model  # и субагенты
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
+        ANTHROPIC_BASE_URL   = "https://ws-q1vxaj37wm4fa9q8.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
+        ANTHROPIC_AUTH_TOKEN = $key
     }
+} elseif ($Provider -eq "ollama") {
+    if (-not $Model) { throw "Укажите модель Ollama: -Model qwen3.5:4b" }
+    # контекст Anthropic API не передаёт, а по умолчанию у Ollama 4–32 тыс. — вариант модели со своим num_ctx;
+    # num_gpu — когда модель целиком не влезает в общую память встроенной видеокарты и llama-server падает при загрузке
+    $variant = "$Model-$($Context / 1024)k"
+    $modelfile = "FROM $Model`nPARAMETER num_ctx $Context"
+    if ($Gpu -ge 0) { $variant += "-gpu$Gpu"; $modelfile += "`nPARAMETER num_gpu $Gpu" }
+    $modelfile | Set-Content "$env:TEMP\$Name.Modelfile" -Encoding ascii  # без BOM
+    cmd /c "ollama create $variant -f `"$env:TEMP\$Name.Modelfile`" >nul 2>&1"  # ход работы — в stderr, не ошибка
+    if ($LASTEXITCODE) { throw "Нет модели $Model в Ollama — скачайте: ollama pull $Model" }
+    Remove-Item "$env:TEMP\$Name.Modelfile"
+    $Model = $variant
+    $vars = @{
+        ANTHROPIC_BASE_URL   = "http://127.0.0.1:11434"
+        ANTHROPIC_AUTH_TOKEN = "ollama"  # ключ Ollama не проверяет
+        API_TIMEOUT_MS       = "3600000"  # первый ответ локальной модели — минуты: промпт Claude Code ~25 тыс. токенов
+        NO_PROXY             = "127.0.0.1,localhost"  # мимо системного прокси
+    }
+}
+if ($Provider -ne "claude") {
+    # фоновые задачи и субагенты — та же модель, не подписка
+    foreach ($k in "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                   "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL") { $vars[$k] = $Model }
+    $vars["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 }
 $vars["PROJECT_DIR"] = (Resolve-Path (Join-Path $root "..\ml-student-dropout")).Path  # копия не рядом с ML-проектом
 $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -76,8 +103,14 @@ if ($Clone) {
     }
 } else {
     New-Item -ItemType Directory $work | Out-Null
-    foreach ($item in "app", "static", "support", "requirements.txt", "ruff.toml", ".gitignore") {
-        Copy-Item (Join-Path $root $item) $work -Recurse
+    $code = "app", "static", "support", "requirements.txt", "ruff.toml", ".gitignore"
+    if ($Ref) {
+        # код из коммита: задача bug-fix — на версии с багом, до фикса дня 37
+        git -C $root archive -o "$work\code.tar" $Ref @code
+        tar -xf "$work\code.tar" -C $work
+        Remove-Item "$work\code.tar"
+    } else {
+        foreach ($item in $code) { Copy-Item (Join-Path $root $item) $work -Recurse }
     }
     Copy-Item "$rulesDir\CLAUDE.md", "$rulesDir\.claude" $work -Recurse
     Get-ChildItem $work -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
@@ -132,6 +165,7 @@ $denied = ($events | Where-Object type -eq "user" | ForEach-Object { $_.message.
 $tokensIn = ($results | ForEach-Object { $_.usage.input_tokens + $_.usage.cache_read_input_tokens + $_.usage.cache_creation_input_tokens } | Measure-Object -Sum).Sum
 $tokensOut = ($results | ForEach-Object { $_.usage.output_tokens } | Measure-Object -Sum).Sum
 $what = if ($Agent) { "профиль $Agent$(if ($Task -ne $Agent) { ", задача $Task" })" } else { "правила: $(if ($Rules) { $Rules } else { 'текущие' })" }
+if ($Ref) { $what += ", код $Ref" }
 @(
     "# Прогон $Name — $($init.model) ($Provider), $what, $($started.ToString('dd.MM.yyyy HH:mm'))",
     "",

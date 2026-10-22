@@ -1,0 +1,12 @@
+All checks passed!
+--- import app.main
+ok
+--- файлы, которые изменил Claude: app/main.py
+--- проверка задачи: experiment\smoke.py
+{'q': 'как запустить', 'top': 2} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}
+{'q': 'как запустить'} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}
+{} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}
+{'q': '  '} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}
+{'q': 'x', 'top': 11} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}
+{'q': 'x', 'top': 0} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}
+{'q': 'x', 'top': 'abc'} → 422 {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None}]}

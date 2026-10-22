@@ -1,0 +1,5 @@
+# qwen3-coder 30B для Continue на этом ноутбуке: 36 из 49 слоёв — на встроенной Radeon 780M (12,8 ГБ), остальные — на процессоре.
+# Целиком (17,5 ГБ) модель в общую видеопамять не влезает: llama-server падает при загрузке, а Ollama сам слои не урезает.
+# Создать: ollama create qwen3-coder:30b-gpu36 -f .continue/qwen3-coder-30b.Modelfile
+FROM qwen3-coder:30b
+PARAMETER num_gpu 36

@@ -1,0 +1,12 @@
+All checks passed!
+--- import app.main
+ok
+--- файлы, которые изменил Claude: app/main.py, test_search_endpoint.py
+--- проверка задачи: experiment\smoke.py
+{'q': 'как запустить', 'top': 2} → 200 {'hits': [{'file': 'README.md', 'title': 'Быстрый старт', 'text': '```bash\npython -m venv .venv\n.venv\\Scripts\\activate          # Linux / macOS: source .venv/bin/activate\npip install -r requirements.txt\nuvicorn src
+{'q': 'как запустить'} → 200 {'hits': [{'file': 'README.md', 'title': 'Быстрый старт', 'text': '```bash\npython -m venv .venv\n.venv\\Scripts\\activate          # Linux / macOS: source .venv/bin/activate\npip install -r requirements.txt\nuvicorn src
+{} → 422 {'detail': [{'type': 'missing', 'loc': ['query', 'q'], 'msg': 'Field required', 'input': None}]}
+{'q': '  '} → 200 {'hits': [{'file': 'docs/api.md', 'title': 'API', 'text': 'Все эндпоинты сервиса: запросы, ответы и ошибки. Базовый адрес при локальном запуске —\n`http://127.0.0.1:8000`. Интерактивная схема — `/docs` (Swagger UI), маши
+{'q': 'x', 'top': 11} → 200 {'hits': [{'file': 'README.md', 'title': 'Дашборд', 'text': '- **Примеры над карточками** — показательные студенты из тестовой выборки, модель их не видела:\n  «Высокий риск», «Риск вырос за год», «Риск снизился за год»,
+{'q': 'x', 'top': 0} → 200 {'hits': [], 'seconds': 0.0}
+{'q': 'x', 'top': 'abc'} → 422 {'detail': [{'type': 'int_parsing', 'loc': ['query', 'top'], 'msg': 'Input should be a valid integer, unable to parse string as an integer', 'input': 'abc'}]}

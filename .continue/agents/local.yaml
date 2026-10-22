@@ -1,0 +1,59 @@
+# Локальный код-ассистент для PyCharm: Continue + Ollama, работает без интернета.
+# Чат, правка и агент — qwen3-coder 30B или qwen3.5 4B; автокомплит — qwen2.5-coder 1.5B.
+# Правила проекта (CLAUDE.md) идут системным промптом из .continue/rules/; что модели не показывать — .continueignore.
+name: Локальный ассистент
+version: 1.0.0
+schema: v1
+
+models:
+  - name: qwen3-coder 30B
+    provider: ollama
+    model: qwen3-coder:30b-gpu36  # 36 слоёв на видеокарте — .continue/qwen3-coder-30b.Modelfile
+    apiBase: http://127.0.0.1:11434
+    roles: [chat, edit, apply]
+    capabilities: [tool_use]
+    defaultCompletionOptions:
+      temperature: 0.2  # код по правилам проекта, а не творчество: меньше случайных отступлений
+      topP: 0.9
+      contextLength: 32768  # правила ~3 тыс. токенов + несколько файлов; модель с ним — 20,6 ГБ памяти
+      maxTokens: 4096
+    requestOptions:
+      noProxy: ["127.0.0.1", "localhost"]  # мимо системного прокси 127.0.0.1:7890
+
+  - name: qwen3.5 4B
+    provider: ollama
+    model: qwen3.5:4b
+    apiBase: http://127.0.0.1:11434
+    roles: [chat, edit, apply]
+    capabilities: [tool_use]
+    defaultCompletionOptions:
+      temperature: 0.2
+      topP: 0.9
+      contextLength: 32768
+      maxTokens: 4096
+    requestOptions:
+      noProxy: ["127.0.0.1", "localhost"]
+      extraBodyProperties:
+        think: false  # без размышлений: в чате они дольше самого ответа
+
+  - name: qwen2.5-coder 1.5B
+    provider: ollama
+    model: qwen2.5-coder:1.5b-base
+    apiBase: http://127.0.0.1:11434
+    roles: [autocomplete]
+    autocompleteOptions:
+      debounceDelay: 300  # подсказка — после паузы в наборе, а не на каждый символ
+      maxPromptTokens: 1024  # код до и после курсора: больше — дольше ждать подсказку
+    requestOptions:
+      noProxy: ["127.0.0.1", "localhost"]
+
+# что модель видит в чате: файл в редакторе, открытые вкладки, @-ссылки на файлы и функции, дерево, diff, терминал, ошибки
+context:
+  - provider: currentFile
+  - provider: open
+  - provider: file
+  - provider: code
+  - provider: tree
+  - provider: diff
+  - provider: terminal
+  - provider: problems

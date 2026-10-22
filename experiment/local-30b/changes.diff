@@ -1,0 +1,86 @@
+diff --git a/app/main.py b/app/main.py
+index bebc5cc..9d460de 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -2,6 +2,7 @@
+ проекта /files, MCP-серверы git на /mcp/git, CRM на /mcp/crm и файлов на /mcp/files."""
+ import asyncio
+ import logging
++import time
+ from contextlib import asynccontextmanager
+ 
+ import uvicorn
+@@ -137,5 +138,26 @@ async def files_discard():
+     return await files.discard()
+ 
+ 
++@app.get("/api/search")
++async def search_docs(q: str, top: int | None = None):
++    """Поиск по документации проекта без модели. Параметры: q — запрос (обязательный), top — сколько фрагментов вернуть."""
++    if not q:
++        raise HTTPException(status_code=400, detail="Параметр q (запрос) обязателен")
++
++    if top is None:
++        top = config.TOP
++    elif top > 10:
++        top = 10
++
++    started = time.perf_counter()
++    hits = await rag.search(q, top)
++    seconds = round(time.perf_counter() - started, 2)
++
++    return {
++        "hits": hits,
++        "seconds": seconds
++    }
++
++
+ if __name__ == "__main__":
+     uvicorn.run(app, host=config.HOST, port=config.PORT)
+diff --git a/test_search_endpoint.py b/test_search_endpoint.py
+new file mode 100644
+index 0000000..61821fe
+--- /dev/null
++++ b/test_search_endpoint.py
+@@ -0,0 +1,40 @@
++#!/usr/bin/env python3
++"""Test script for the new /api/search endpoint."""
++
++import os
++import tempfile
++from fastapi.testclient import TestClient
++
++# Set up environment variables for testing
++os.environ['PROJECT_DIR'] = '../ml-student-dropout'
++os.environ['DATA_DIR'] = tempfile.mkdtemp()
++
++# Import after setting env vars
++from app import llm, main
++
++async def fake_embed(texts):
++    return [[float(len(t) % 7 + 1), 1.0] + [0.0] * 1022 for t in texts]
++
++# Replace the embed function with a fake one for testing
++llm.embed = fake_embed
++
++def test_search_endpoint():
++    client = TestClient(main.app)
++
++    # Test valid search
++    response = client.get('/api/search', params={'q': 'как запустить'})
++    print(f"Status code: {response.status_code}")
++    print(f"Response: {response.json()}")
++
++    # Test with top parameter
++    response = client.get('/api/search', params={'q': 'запуск', 'top': 5})
++    print(f"Status code with top=5: {response.status_code}")
++    print(f"Response with top=5: {response.json()}")
++
++    # Test empty query (should fail)
++    response = client.get('/api/search', params={'q': ''})
++    print(f"Status code with empty query: {response.status_code}")
++    print(f"Response with empty query: {response.json()}")
++
++if __name__ == "__main__":
++    test_search_endpoint()
+\ No newline at end of file
